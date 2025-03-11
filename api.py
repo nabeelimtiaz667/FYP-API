@@ -7,9 +7,18 @@ import pywt
 from scipy.signal import butter, filtfilt
 import tensorflow as tf
 import keras
+from fastapi.middleware.cors import CORSMiddleware
 
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins (change this in production)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
 
 # Load trained model
 MODEL_PATH = "cnn_lstm.keras"
@@ -21,6 +30,7 @@ LOW_VARIANCE_THRESHOLD = 0.001
 HIGH_VARIANCE_THRESHOLD = 10
 EEG_SHAPE = (6000, 10, 1)
 
+TRAN_CSV_PATH = "train.csv"  # Path to your expert consensus CSV file
 
 # 🧠 Bandpass Filter (0.5–50 Hz)
 def bandpass_filter(data, lowcut=0.5, highcut=50, fs=200, order=5):
@@ -88,6 +98,34 @@ def preprocess_parquet(eeg_df):
         return None
 
 
+# Function to get expert consensus from tran.csv
+def get_expert_consensus(file_name: str):
+    try:
+        # Remove the file extension to match the eeg_id in tran.csv
+        file_name_without_extension = os.path.splitext(file_name)[0]
+        
+        # Convert the file name (which is a string) to an integer to match the `eeg_id` type
+        file_name_without_extension = int(file_name_without_extension)
+        
+        # Read the tran.csv file
+        df = pd.read_csv(TRAN_CSV_PATH)
+
+        # Ensure the `eeg_id` is also treated as an integer for comparison
+        df['eeg_id'] = df['eeg_id'].astype(int)
+        
+        # Find the matching eeg_id for the file name (after stripping extension)
+        consensus_row = df[df['eeg_id'] == file_name_without_extension]
+        
+        if not consensus_row.empty:
+            return consensus_row['expert_consensus'].values[0]
+        else:
+            return f"No match is found. EEG ID: {file_name_without_extension}"  # If no match is found
+    except Exception as e:
+        print(f"Error while reading expert consensus: {e}")
+        return f"Error while retrieving: {e}"
+
+
+
 @app.post("/file-info/")
 async def get_file_shape(file: UploadFile = File(...)):
     """
@@ -103,7 +141,6 @@ async def get_file_shape(file: UploadFile = File(...)):
         if file.filename.endswith(".parquet"):
             df = pd.read_parquet(temp_filename)
             shape = df.shape  # (rows, columns)
-
         else:
             return {"error": "Unsupported file format. Use .npy or .parquet"}
 
@@ -131,7 +168,15 @@ async def get_file_shape(file: UploadFile = File(...)):
         # Convert Result
         result = "Seizure" if predicted_class == 1 else "Non-Seizure"
 
-        return {"shape": shape, "prediction": result, "confidence": confidence}
+        # Get expert consensus from tran.csv
+        real_prediction = get_expert_consensus(file.filename)
+
+        return {
+            "shape": shape,
+            "prediction": result,
+            "confidence": confidence,
+            "real_prediction": real_prediction,
+        }
 
     except Exception as e:
         return {"error": str(e)}
