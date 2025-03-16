@@ -1,4 +1,5 @@
 import os
+import shutil
 from fastapi import FastAPI, File, UploadFile
 import numpy as np
 import pandas as pd
@@ -20,8 +21,9 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Load trained model
 MODEL_PATH = "cnn_lstm.keras"
+
+# Load trained model
 model = keras.models.load_model(MODEL_PATH)
 
 # Define constants
@@ -31,6 +33,7 @@ HIGH_VARIANCE_THRESHOLD = 10
 EEG_SHAPE = (6000, 10, 1)
 
 TRAN_CSV_PATH = "train.csv"  # Path to your expert consensus CSV file
+
 
 # 🧠 Bandpass Filter (0.5–50 Hz)
 def bandpass_filter(data, lowcut=0.5, highcut=50, fs=200, order=5):
@@ -103,27 +106,26 @@ def get_expert_consensus(file_name: str):
     try:
         # Remove the file extension to match the eeg_id in tran.csv
         file_name_without_extension = os.path.splitext(file_name)[0]
-        
+
         # Convert the file name (which is a string) to an integer to match the `eeg_id` type
         file_name_without_extension = int(file_name_without_extension)
-        
+
         # Read the tran.csv file
         df = pd.read_csv(TRAN_CSV_PATH)
 
         # Ensure the `eeg_id` is also treated as an integer for comparison
-        df['eeg_id'] = df['eeg_id'].astype(int)
-        
+        df["eeg_id"] = df["eeg_id"].astype(int)
+
         # Find the matching eeg_id for the file name (after stripping extension)
-        consensus_row = df[df['eeg_id'] == file_name_without_extension]
-        
+        consensus_row = df[df["eeg_id"] == file_name_without_extension]
+
         if not consensus_row.empty:
-            return consensus_row['expert_consensus'].values[0]
+            return consensus_row["expert_consensus"].values[0]
         else:
             return f"No match is found. EEG ID: {file_name_without_extension}"  # If no match is found
     except Exception as e:
         print(f"Error while reading expert consensus: {e}")
         return f"Error while retrieving: {e}"
-
 
 
 @app.post("/file-info/")
@@ -160,8 +162,12 @@ async def get_file_shape(file: UploadFile = File(...)):
         )  # (6000, 10) → (6000, 10, 1)
         eeg_processed = np.expand_dims(eeg_processed, axis=0)  # Add batch dimension
 
+        # Log model graph and weights to TensorBoard
+        model.summary()
+
         # Get Prediction
         prediction = model.predict(eeg_processed)
+
         predicted_class = np.argmax(prediction)  # Get class index
         confidence = float(np.max(prediction))  # Confidence Score
 
